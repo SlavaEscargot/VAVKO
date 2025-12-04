@@ -13,6 +13,53 @@ from reportlab.lib.utils import ImageReader
 import tempfile
 import sys
 
+import sqlite3
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog, filedialog
+import os
+from tkinter import font as tkfont
+import sys
+
+# Проверка необходимых модулей
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    print("Предупреждение: PIL не установлен. Функции изображений недоступны.")
+    print("Установите: pip install Pillow")
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    print("Предупреждение: pandas не установлен. Функции Excel недоступны.")
+    print("Установите: pip install pandas")
+
+try:
+    import openpyxl
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+    print("Предупреждение: openpyxl не установлен. Экспорт в Excel недоступен.")
+    print("Установите: pip install openpyxl")
+
+try:
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+    print("Предупреждение: reportlab не установлен. Функции печати недоступны.")
+    print("Установите: pip install reportlab")
+
+import io
+import base64
+import tempfile
+
 # Установка правильной кодировки
 if sys.platform.startswith('win'):
     os.system('chcp 65001 > nul')  # UTF-8 для Windows
