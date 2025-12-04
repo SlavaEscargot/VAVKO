@@ -1,4 +1,7 @@
-
+import traceback
+import json
+import math
+from datetime import datetime
 from tkinter import font as tkfont
 from PIL import Image, ImageTk
 import pandas as pd
@@ -8,7 +11,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.utils import ImageReader
 import tempfile
-
+import shutil
 from PIL import Image, ImageTk, ImageEnhance
 import sqlite3
 import tkinter as tk
@@ -213,6 +216,7 @@ class ModernDatabaseApp:
             ("📝 Добавить колонку", self.add_column_dialog, 'Primary.TButton'),
             ("🖼️ Импорт Excel", self.import_excel, 'Success.TButton'),
             ("📤 Экспорт Excel", self.export_excel, 'Primary.TButton'),
+            ("🖼️ Экспорт Excel с фото", self.export_excel_with_images_embedded, 'Success.TButton'),
             ("🖨️ Печать", self.print_data, 'Warning.TButton'),
             ("🔍 Исследовать БД", self.inspect_database, 'Primary.TButton'),
             ("🖼️ Найти все фото", self.find_and_display_all_photos, 'Success.TButton'),
@@ -1877,6 +1881,7 @@ class ModernDatabaseApp:
             messagebox.showerror("Ошибка", f"Ошибка импорта Excel: {e}")
 
     def export_excel(self):
+        """Экспорт в Excel (базовый)"""
         if not self.current_table and not self.joined_tables:
             messagebox.showwarning("Предупреждение", "Нет данных для экспорта!")
             return
@@ -1885,7 +1890,7 @@ class ModernDatabaseApp:
         initial_dir = os.path.expanduser("~")
 
         file_path = filedialog.asksaveasfilename(
-            title="Сохранить как Excel",
+            title="Сохранить как Excel (базовый)",
             defaultextension=".xlsx",
             initialdir=initial_dir,
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
@@ -1904,7 +1909,8 @@ class ModernDatabaseApp:
 
             for i, col in enumerate(display_columns):
                 if self.is_image_column(col):
-                    df[col] = ["🖼️ Фото" if isinstance(val, bytes) else val for val in df[col]]
+                    df[col] = ["🖼️ Фото" if isinstance(val, bytes) and self.is_valid_image_blob(val) else val for val in
+                               df[col]]
 
             # Создаем директорию, если она не существует
             directory = os.path.dirname(file_path)
@@ -2525,6 +2531,353 @@ class ModernDatabaseApp:
                    command=save_changes, style='Success.TButton').pack(side=tk.LEFT, padx=5)
         ttk.Button(save_frame, text="❌ Отмена",
                    command=dialog.destroy, style='Secondary.TButton').pack(side=tk.LEFT, padx=5)
+
+    def export_excel_with_images_embedded(self):
+        """Экспорт в Excel с встроенными миниатюрами изображений"""
+        if not self.current_table and not self.joined_tables:
+            messagebox.showwarning("Предупреждение", "Нет данных для экспорта!")
+            return
+
+        initial_dir = os.path.expanduser("~")
+
+        # Спрашиваем пользователя о параметрах экспорта
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Настройки экспорта")
+        dialog.geometry("400x300")
+        dialog.configure(bg='#f5f5f5')
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        main_frame = ttk.Frame(dialog, style='Modern.TFrame')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        ttk.Label(main_frame, text="⚙️ Настройки экспорта фото",
+                  font=('Segoe UI', 12, 'bold')).pack(pady=10)
+
+        # Опции экспорта
+        self.export_include_images = tk.BooleanVar(value=True)
+        self.export_image_size = tk.IntVar(value=100)
+        self.export_save_as_files = tk.BooleanVar(value=False)
+
+        ttk.Checkbutton(main_frame, text="Включать фото в Excel",
+                        variable=self.export_include_images).pack(anchor=tk.W, pady=5)
+
+        ttk.Checkbutton(main_frame, text="Сохранять фото как отдельные файлы",
+                        variable=self.export_save_as_files).pack(anchor=tk.W, pady=5)
+
+        ttk.Label(main_frame, text="Размер миниатюр (пикселей):").pack(anchor=tk.W, pady=5)
+        size_frame = ttk.Frame(main_frame, style='Modern.TFrame')
+        size_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Radiobutton(size_frame, text="Маленькие (80px)", variable=self.export_image_size,
+                        value=80).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(size_frame, text="Средние (100px)", variable=self.export_image_size,
+                        value=100).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(size_frame, text="Большие (150px)", variable=self.export_image_size,
+                        value=150).pack(side=tk.LEFT, padx=5)
+
+        # Кнопки
+        buttons_frame = ttk.Frame(main_frame, style='Modern.TFrame')
+        buttons_frame.pack(fill=tk.X, pady=20)
+
+        def proceed():
+            dialog.destroy()
+            self.perform_excel_export_with_images()
+
+        ttk.Button(buttons_frame, text="✅ Продолжить", command=proceed,
+                   style='Success.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(buttons_frame, text="❌ Отмена", command=dialog.destroy,
+                   style='Secondary.TButton').pack(side=tk.LEFT, padx=5)
+
+        self.root.wait_window(dialog)
+
+    def perform_excel_export_with_images(self):
+        """Выполняет экспорт в Excel с изображениями - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+        file_path = filedialog.asksaveasfilename(
+            title="Сохранить как Excel",
+            defaultextension=".xlsx",
+            initialdir=os.path.expanduser("~"),
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+
+        if not file_path:
+            return
+
+        try:
+            query, display_columns = self.build_query()
+            cursor = self.connection.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+
+            from openpyxl import Workbook
+            from openpyxl.drawing.image import Image as ExcelImage
+            from openpyxl.utils import get_column_letter
+            import tempfile
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = self.current_table or "Данные"
+
+            # Записываем заголовки
+            for col_idx, col_name in enumerate(display_columns, 1):
+                ws.cell(row=1, column=col_idx, value=col_name)
+                col_letter = get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = 15
+
+            photo_count = 0
+            saved_files = []
+            temp_files = []
+
+            # Создаем временную директорию для фото
+            temp_dir = tempfile.mkdtemp(prefix="excel_export_")
+
+            try:
+                # Обрабатываем данные
+                for row_idx, row in enumerate(rows, 2):
+                    for col_idx, value in enumerate(row, 1):
+                        col_name = display_columns[col_idx - 1]
+
+                        if (col_name in self.image_columns and
+                                value is not None and
+                                isinstance(value, bytes) and
+                                self.export_include_images.get()):
+
+                            try:
+                                if self.is_valid_image_blob(value):
+                                    # Создаем временный файл в нашей временной директории
+                                    temp_file = os.path.join(temp_dir, f"photo_{row_idx}_{col_idx}.png")
+
+                                    with open(temp_file, 'wb') as f:
+                                        f.write(value)
+                                    temp_files.append(temp_file)
+
+                                    if self.export_save_as_files.get():
+                                        # Сохраняем как отдельный файл рядом с Excel
+                                        save_dir = os.path.dirname(file_path) or "."
+                                        photo_filename = f"{self.current_table}_row{row_idx - 1}_{col_name}.png"
+                                        photo_path = os.path.join(save_dir, photo_filename)
+
+                                        # Создаем директорию, если её нет
+                                        os.makedirs(save_dir, exist_ok=True)
+
+                                        import shutil
+                                        shutil.copy2(temp_file, photo_path)
+                                        saved_files.append(photo_path)
+                                        ws.cell(row=row_idx, column=col_idx, value=f"📷 {photo_filename}")
+                                    else:
+                                        # Вставляем изображение в Excel
+                                        try:
+                                            img = ExcelImage(temp_file)
+                                            img_size = self.export_image_size.get()
+                                            img.width = img_size
+                                            img.height = img_size
+
+                                            cell_coord = f"{get_column_letter(col_idx)}{row_idx}"
+                                            ws.add_image(img, cell_coord)
+                                            ws.row_dimensions[row_idx].height = img_size * 0.75
+                                            photo_count += 1
+                                        except Exception as img_error:
+                                            ws.cell(row=row_idx, column=col_idx,
+                                                    value=f"[Ошибка: {str(img_error)[:30]}]")
+
+                                else:
+                                    ws.cell(row=row_idx, column=col_idx, value="[Невалидное изображение]")
+
+                            except Exception as e:
+                                ws.cell(row=row_idx, column=col_idx, value=f"[Ошибка: {str(e)[:30]}]")
+
+                        elif col_name in self.image_columns and value is not None:
+                            ws.cell(row=row_idx, column=col_idx, value="🖼️ Фото")
+
+                        elif isinstance(value, bool):
+                            ws.cell(row=row_idx, column=col_idx, value="✅ Да" if value else "❌ Нет")
+
+                        elif value is None:
+                            ws.cell(row=row_idx, column=col_idx, value="")
+
+                        else:
+                            ws.cell(row=row_idx, column=col_idx, value=str(value))
+
+                # Создаем лист с информацией
+                ws_info = wb.create_sheet(title="Информация")
+                ws_info['A1'] = "Отчет об экспорте"
+                ws_info['A3'] = f"Таблица: {self.current_table}"
+                ws_info['A4'] = f"Файл базы данных: {os.path.basename(self.db_name)}"
+                ws_info['A5'] = f"Дата экспорта: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                ws_info['A6'] = f"Всего строк: {len(rows)}"
+                ws_info['A7'] = f"Всего колонок: {len(display_columns)}"
+                ws_info['A8'] = f"Фото в экспорте: {photo_count}"
+
+                if saved_files:
+                    ws_info['A10'] = "Сохраненные файлы фото:"
+                    for i, file_path in enumerate(saved_files, start=11):
+                        ws_info[f'A{i}'] = os.path.basename(file_path)
+
+                # Сохраняем файл
+                wb.save(file_path)
+
+                # Показываем отчет
+                report = f"✅ Экспорт завершен успешно!\n\n"
+                report += f"Файл: {os.path.basename(file_path)}\n"
+                report += f"Расположение: {os.path.dirname(file_path)}\n"
+                report += f"Строк данных: {len(rows)}\n"
+                report += f"Колонок: {len(display_columns)}\n"
+
+                if self.export_include_images.get():
+                    if self.export_save_as_files.get():
+                        report += f"Фото сохранены как файлы: {len(saved_files)}\n"
+                    else:
+                        report += f"Фото встроены в Excel: {photo_count}\n"
+
+                self.update_status(f"✅ Экспорт завершен: {os.path.basename(file_path)}")
+                messagebox.showinfo("Успешный экспорт", report)
+
+            finally:
+                # Очищаем временные файлы
+                for temp_file in temp_files:
+                    try:
+                        if os.path.exists(temp_file):
+                            os.unlink(temp_file)
+                    except:
+                        pass
+
+                # Удаляем временную директорию
+                try:
+                    if os.path.exists(temp_dir):
+                        os.rmdir(temp_dir)
+                except:
+                    pass
+
+        except PermissionError as e:
+            messagebox.showerror("Ошибка доступа",
+                                 f"Нет прав доступа к файлу:\n{file_path}\n\n"
+                                 f"Сохраните файл в другую папку (например, Документы или Рабочий стол)")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка экспорта: {str(e)}")
+
+    def export_excel_simple(self):
+        """Экспорт в Excel с текстовыми ссылками на фото"""
+        if not self.current_table and not self.joined_tables:
+            messagebox.showwarning("Предупреждение", "Нет данных для экспорта!")
+            return
+
+        initial_dir = os.path.expanduser("~")
+
+        # Спрашиваем о методе экспорта
+        export_method = messagebox.askyesno("Метод экспорта",
+                                            "Хотите ли вы экспортировать фото как файлы?\n\n"
+                                            "✅ Да - фото будут сохранены как отдельные файлы\n"
+                                            "❌ Нет - в Excel будут только ссылки на фото")
+
+        file_path = filedialog.asksaveasfilename(
+            title="Сохранить как Excel",
+            defaultextension=".xlsx",
+            initialdir=initial_dir,
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+
+        if not file_path:
+            return
+
+        try:
+            query, display_columns = self.build_query()
+            cursor = self.connection.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+
+            # Создаем DataFrame для экспорта
+            export_data = []
+            photo_files = []  # Список сохраненных фото файлов
+
+            for row_idx, row in enumerate(rows):
+                row_data = {}
+                for col_idx, value in enumerate(row):
+                    col_name = display_columns[col_idx]
+
+                    if col_name in self.image_columns and value is not None and isinstance(value, bytes):
+                        if export_method:  # Сохраняем фото как файлы
+                            try:
+                                if self.is_valid_image_blob(value):
+                                    # Создаем имя файла для фото
+                                    photo_filename = f"{self.current_table}_row{row_idx + 1}_{col_name}.png"
+                                    photo_path = os.path.join(os.path.dirname(file_path), photo_filename)
+
+                                    # Сохраняем фото
+                                    with open(photo_path, 'wb') as f:
+                                        f.write(value)
+                                    photo_files.append(photo_path)
+
+                                    # В Excel записываем имя файла
+                                    row_data[col_name] = f"📷 {photo_filename}"
+                                else:
+                                    row_data[col_name] = "[BLOB данные]"
+                            except Exception as e:
+                                row_data[col_name] = f"[Ошибка фото]"
+                        else:  # Просто указываем наличие фото
+                            if self.is_valid_image_blob(value):
+                                row_data[col_name] = "🖼️ Фото (в базе данных)"
+                            else:
+                                row_data[col_name] = "[BLOB данные]"
+
+                    elif isinstance(value, bool):
+                        row_data[col_name] = "Да" if value else "Нет"
+
+                    elif value is None:
+                        row_data[col_name] = ""
+
+                    else:
+                        row_data[col_name] = str(value)
+
+                export_data.append(row_data)
+
+            df = pd.DataFrame(export_data, columns=display_columns)
+
+            # Создаем директорию, если она не существует
+            directory = os.path.dirname(file_path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory)
+
+            # Экспортируем в Excel
+            df.to_excel(file_path, index=False, engine='openpyxl')
+
+            # Если экспортировали фото как файлы, добавляем информацию об этом
+            if export_method and photo_files:
+                # Добавляем лист с информацией о фото
+                from openpyxl import load_workbook
+                wb = load_workbook(file_path)
+                ws_info = wb.create_sheet(title="Файлы фото")
+
+                ws_info['A1'] = "Список файлов с фотографиями"
+                ws_info['A2'] = "Путь к файлу"
+                ws_info['B2'] = "Размер (байт)"
+
+                for i, photo_path in enumerate(photo_files, start=3):
+                    ws_info[f'A{i}'] = os.path.basename(photo_path)
+                    ws_info[f'B{i}'] = os.path.getsize(photo_path) if os.path.exists(photo_path) else "Не найден"
+
+                wb.save(file_path)
+
+            # Создаем отчет
+            report = f"✅ Экспорт завершен успешно!\n\n"
+            report += f"Файл: {file_path}\n"
+            report += f"Строк: {len(rows)}\n"
+            report += f"Колонок: {len(display_columns)}\n"
+
+            if export_method:
+                report += f"Фото сохранены как файлы: {len(photo_files)}\n\n"
+                report += "💡 Фотографии сохранены в той же папке, что и Excel файл."
+            else:
+                report += "\n💡 Фотографии отмечены как '🖼️ Фото (в базе данных)'"
+
+            messagebox.showinfo("Успех", report)
+            self.update_status(f"✅ Данные экспортированы в {os.path.basename(file_path)}")
+
+        except PermissionError as e:
+            messagebox.showerror("Ошибка доступа",
+                                 f"Нет прав доступа к файлу:\n{file_path}\n\n"
+                                 f"Сохраните файл в другую папку (например, Документы или Рабочий стол)")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка экспорта в Excel: {e}")
 # КЛАССЫ ДИАЛОГОВ
 
 class ModernAddColumnDialog:
