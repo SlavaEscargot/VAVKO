@@ -4,3 +4,4 @@ __pycache__/
 .idea/
 *.pdf
 .DS_Store
+my_database.db

@@ -1504,7 +1504,6 @@ class ModernDatabaseApp:
                 y_pos -= row_height
 
             pdf.save()
-            self.update_status(f"✅ PDF сохранен: {os.path.basename(file_path)}")
             messagebox.showinfo("Успех", f"PDF успешно создан:\n{file_path}")
 
         except Exception as e:
@@ -2574,50 +2573,78 @@ class ModernCreateTableDialog:
         self.app = app
         self.top = tk.Toplevel(parent)
         self.top.title("Создать таблицу")
-        self.top.geometry("500x400")
+        self.top.geometry("600x500")
         self.top.configure(bg='#f5f5f5')
         self.top.transient(parent)
         self.top.grab_set()
+
+        # Делаем окно изменяемым и устанавливаем минимальный размер
+        self.top.resizable(True, True)
+        self.top.minsize(450, 350)
 
         self.columns = []
         self.create_widgets()
 
     def create_widgets(self):
+        # Создаем главный фрейм с padding и настройкой весов для расширения
         main_frame = ttk.Frame(self.top, style='Modern.TFrame')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
+        # Настраиваем сетку main_frame для правильного расширения
+        main_frame.grid_rowconfigure(1, weight=1)
+        main_frame.grid_columnconfigure(0, weight=1)
+
         ttk.Label(main_frame, text="📊 Создание новой таблицы",
-                  font=('Segoe UI', 14, 'bold')).pack(pady=(0, 20))
+                  font=('Segoe UI', 14, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
-        ttk.Label(main_frame, text="Название таблицы:").pack(anchor=tk.W, pady=5)
-        self.table_name = ttk.Entry(main_frame, style='Modern.TEntry', font=('Segoe UI', 10))
-        self.table_name.pack(fill=tk.X, pady=(5, 0))
+        # Фрейм для названия таблицы
+        name_frame = ttk.Frame(main_frame, style='Modern.TFrame')
+        name_frame.grid(row=1, column=0, sticky=tk.W + tk.E, pady=(0, 10))
+        name_frame.columnconfigure(1, weight=1)
 
+        ttk.Label(name_frame, text="Название таблицы:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.table_name = ttk.Entry(name_frame, style='Modern.TEntry', font=('Segoe UI', 10))
+        self.table_name.grid(row=0, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+
+        # Фрейм для списка колонок с расширением
         columns_frame = ttk.LabelFrame(main_frame, text="📋 Колонки таблицы",
                                        style='Modern.TLabelframe')
-        columns_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
+        columns_frame.grid(row=2, column=0, sticky=tk.NSEW, pady=(0, 20))
 
+        # Настраиваем сетку columns_frame
+        columns_frame.grid_rowconfigure(0, weight=1)
+        columns_frame.grid_columnconfigure(0, weight=1)
+
+        # Контейнер для списка и кнопок
         list_container = ttk.Frame(columns_frame, style='Modern.TFrame')
-        list_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        list_container.grid(row=0, column=0, sticky=tk.NSEW, padx=10, pady=10)
 
+        # Настраиваем сетку list_container
+        list_container.grid_rowconfigure(0, weight=1)
+        list_container.grid_columnconfigure(0, weight=1)
+
+        # Список колонок
         self.columns_listbox = tk.Listbox(list_container, bg='white', bd=0, font=('Segoe UI', 9))
-        self.columns_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.columns_listbox.grid(row=0, column=0, sticky=tk.NSEW)
 
+        # Полоса прокрутки
         list_scrollbar = ttk.Scrollbar(list_container, orient=tk.VERTICAL)
-        list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        list_scrollbar.grid(row=0, column=1, sticky=tk.NS)
         self.columns_listbox.config(yscrollcommand=list_scrollbar.set)
         list_scrollbar.config(command=self.columns_listbox.yview)
 
+        # Фрейм для кнопок управления колонками
         col_buttons_frame = ttk.Frame(columns_frame, style='Modern.TFrame')
-        col_buttons_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        col_buttons_frame.grid(row=1, column=0, sticky=tk.EW, padx=10, pady=(0, 10))
 
         ttk.Button(col_buttons_frame, text="➕ Добавить колонку", command=self.add_column_dialog,
                    style='Primary.TButton').pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(col_buttons_frame, text="🗑️ Удалить колонку", command=self.remove_column,
                    style='Danger.TButton').pack(side=tk.LEFT)
 
+        # Фрейм для кнопок диалога
         dialog_buttons = ttk.Frame(main_frame, style='Modern.TFrame')
-        dialog_buttons.pack(fill=tk.X)
+        dialog_buttons.grid(row=3, column=0, sticky=tk.EW, pady=(10, 0))
 
         ttk.Button(dialog_buttons, text="✅ Создать таблицу", command=self.create_table,
                    style='Success.TButton').pack(side=tk.RIGHT, padx=(5, 0))
@@ -2627,13 +2654,20 @@ class ModernCreateTableDialog:
     def add_column_dialog(self):
         dialog = tk.Toplevel(self.top)
         dialog.title("Добавить колонку")
-        dialog.geometry("350x250")
+        dialog.geometry("400x250")
         dialog.configure(bg='#f5f5f5')
         dialog.transient(self.top)
         dialog.grab_set()
 
+        # Делаем окно диалога также изменяемым
+        dialog.resizable(False, False)  # Окно добавления колонки оставляем фиксированным
+        dialog.minsize(350, 200)
+
         main_frame = ttk.Frame(dialog, style='Modern.TFrame')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # Настраиваем сетку для расширения
+        main_frame.columnconfigure(0, weight=1)
 
         ttk.Label(main_frame, text="➕ Новая колонка", font=('Segoe UI', 12, 'bold')).pack(pady=(0, 15))
 
@@ -2654,9 +2688,17 @@ class ModernCreateTableDialog:
                 self.columns.append(column)
                 self.columns_listbox.insert(tk.END, f"{name} ({type_combo.get()})")
                 dialog.destroy()
+            else:
+                messagebox.showwarning("Предупреждение", "Введите имя колонки!")
 
-        ttk.Button(main_frame, text="✅ Добавить", command=add_column,
-                   style='Success.TButton').pack(pady=10)
+        button_frame = ttk.Frame(main_frame, style='Modern.TFrame')
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Button(button_frame, text="✅ Добавить", command=add_column,
+                   style='Success.TButton').pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="❌ Отмена", command=dialog.destroy,
+                   style='Secondary.TButton').pack(side=tk.LEFT)
+
         name_entry.focus()
 
     def remove_column(self):
