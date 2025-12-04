@@ -1,7 +1,4 @@
-import sqlite3
-import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, filedialog
-import os
+
 from tkinter import font as tkfont
 from PIL import Image, ImageTk
 import pandas as pd
@@ -11,13 +8,12 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.utils import ImageReader
 import tempfile
-import sys
 
+from PIL import Image, ImageTk, ImageEnhance
 import sqlite3
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 import os
-from tkinter import font as tkfont
 import sys
 
 # Проверка необходимых модулей
@@ -67,6 +63,8 @@ if sys.platform.startswith('win'):
 
 class ModernDatabaseApp:
     def __init__(self, root):
+        self.image_columns = []  # Список колонок с изображениями
+        self.photo_cache = {}  # Кэш для миниатюр
         self.root = root
         self.root.title("SQLite3 Database Manager - Modern")
         self.root.geometry("1400x900")
@@ -217,7 +215,8 @@ class ModernDatabaseApp:
             ("📤 Экспорт Excel", self.export_excel, 'Primary.TButton'),
             ("🖨️ Печать", self.print_data, 'Warning.TButton'),
             ("🔍 Исследовать БД", self.inspect_database, 'Primary.TButton'),
-            ("🖼️ Найти все фото", self.find_and_display_all_photos, 'Success.TButton')
+            ("🖼️ Найти все фото", self.find_and_display_all_photos, 'Success.TButton'),
+            ("📷 Проверить фото", self.check_and_display_photos, 'Primary.TButton')
         ]
 
         for i, (text, command, style_name) in enumerate(actions):
@@ -596,13 +595,18 @@ class ModernDatabaseApp:
                 messagebox.showwarning("Предупреждение", "Нет атрибутов для отображения!")
                 return
 
+            # Настраиваем Treeview
             self.tree['columns'] = display_columns
+
+            # Определяем, какие колонки содержат фото
+            self.image_columns = []
             for col in display_columns:
                 self.tree.heading(col, text=col)
                 if self.is_image_column(col):
-                    self.tree.column(col, width=120, minwidth=100, stretch=False)
+                    self.image_columns.append(col)
+                    self.tree.column(col, width=150, minwidth=150, stretch=False)
                 else:
-                    self.tree.column(col, width=150, minwidth=80, stretch=True)
+                    self.tree.column(col, width=120, minwidth=80, stretch=True)
 
             available_columns = self.get_available_columns()
             self.sort_column['values'] = available_columns
@@ -613,9 +617,53 @@ class ModernDatabaseApp:
             cursor.execute(query)
             rows = cursor.fetchall()
 
-            for row in rows:
+            # Получаем первичный ключ таблицы для последующего доступа к фото
+            primary_key = None
+            if self.current_table:
+                cursor.execute(f"PRAGMA table_info({self.escape_table_name(self.current_table)})")
+                columns_info = cursor.fetchall()
+                if columns_info:
+                    primary_key = columns_info[0][1]
+
+            # Создаем миниатюры фото
+            self.photo_cache = {}  # Кэш для миниатюр
+            for row_index, row in enumerate(rows):
                 formatted_row = self.format_row_for_display(row, display_columns)
-                self.tree.insert("", tk.END, values=formatted_row)
+                item_id = self.tree.insert("", tk.END, values=formatted_row)
+
+                # Если есть фото-колонки, добавляем миниатюры
+                for col_index, col_name in enumerate(display_columns):
+                    if col_name in self.image_columns and row[col_index] is not None:
+                        try:
+                            # Создаем миниатюру фото
+                            image_data = row[col_index]
+                            if isinstance(image_data, bytes) and len(image_data) > 100:
+                                # Создаем уникальный ключ для кэша
+                                cache_key = f"{primary_key}_{row_index}_{col_name}"
+                                if cache_key not in self.photo_cache:
+                                    image = Image.open(io.BytesIO(image_data))
+                                    image.thumbnail((100, 100))
+                                    photo = ImageTk.PhotoImage(image)
+                                    self.photo_cache[cache_key] = photo
+
+                                # Получаем фото из кэша
+                                photo = self.photo_cache[cache_key]
+
+                                # Создаем кнопку с миниатюрой
+                                btn = ttk.Button(self.tree, image=photo, width=100,
+                                                 command=lambda d=image_data, c=col_name, pk=primary_key, r=row[0]:
+                                                 self.view_image_with_info(c, d, pk, r))
+                                btn.image = photo  # Сохраняем ссылку
+
+                                # Встраиваем кнопку в ячейку Treeview
+                                self.tree.window_create(item_id, column=col_index, window=btn)
+                        except Exception as e:
+                            print(f"Ошибка создания миниатюры: {e}")
+                            # В случае ошибки отображаем текст
+                            self.tree.set(item_id, col_name, "🖼️ Фото")
+
+            # После загрузки данных проверяем фото
+            self.check_and_display_photos()
 
         except sqlite3.Error as e:
             messagebox.showerror("Ошибка", f"Ошибка загрузки данных: {e}")
@@ -655,8 +703,9 @@ class ModernDatabaseApp:
 
             if value is None:
                 formatted_row.append("")
-            elif self.is_image_column(col_name) and isinstance(value, bytes):
-                formatted_row.append("🖼️ Фото")  # Упрощенное отображение
+            elif col_name in self.image_columns and isinstance(value, bytes):
+                # Для фото-колонок оставляем пустое значение, т.к. будем встраивать кнопку
+                formatted_row.append("")
             elif isinstance(value, bool):
                 formatted_row.append("✅ Да" if value else "❌ Нет")
             elif isinstance(value, (int, float)):
@@ -669,6 +718,33 @@ class ModernDatabaseApp:
                 formatted_row.append(text)
 
         return formatted_row
+
+    def is_valid_image_blob(self, data):
+        """Проверяет, являются ли данные валидным изображением"""
+        if not isinstance(data, bytes):
+            return False
+
+        if len(data) < 100:  # Минимальный размер для изображения
+            return False
+
+        try:
+            # Проверяем магические числа форматов изображений
+            if len(data) > 4:
+                # JPEG: FF D8 FF
+                if data[:3] == b'\xff\xd8\xff':
+                    return True
+                # PNG: 89 50 4E 47
+                if data[:4] == b'\x89PNG':
+                    return True
+                # GIF: GIF87a или GIF89a
+                if data[:6] in [b'GIF87a', b'GIF89a']:
+                    return True
+                # BMP: BM
+                if data[:2] == b'BM':
+                    return True
+            return False
+        except:
+            return False
 
     def clear_treeview(self):
         for item in self.tree.get_children():
@@ -757,7 +833,8 @@ class ModernDatabaseApp:
         self.context_menu.add_separator()
         self.context_menu.add_command(label="✏️ Редактировать значение", command=self.edit_cell_value)
         self.context_menu.add_command(label="🖼️ Добавить/изменить фото", command=self.add_photo_to_selected)
-        self.context_menu.add_command(label="👁️ Просмотреть фото", command=self.view_selected_image)
+        self.context_menu.add_command(label="👁️ Просмотреть фото", command=self.view_selected_image_full)
+        self.context_menu.add_command(label="📸 Экспорт всех фото", command=self.export_all_photos)
 
         self.tree.bind("<Button-3>", self.show_context_menu)
         self.tree.bind("<Double-1>", self.on_double_click)
@@ -874,59 +951,124 @@ class ModernDatabaseApp:
             return
 
         try:
-            display_columns = self.tree['columns']
-            col_index = display_columns.index(column_name)
-
-            cursor = self.connection.cursor()
-            query, _ = self.build_query()
-            cursor.execute(query)
-            all_rows = cursor.fetchall()
-
-            image_data = None
-            for original_row in all_rows:
-                if str(original_row[col_index]) == str(self.tree.item(item, 'values')[col_index]):
-                    image_data = original_row[col_index]
-                    break
-
-            if not image_data or not isinstance(image_data, bytes):
-                messagebox.showwarning("Предупреждение", "Фото не найдено!")
+            # Получаем значение из Treeview
+            values = self.tree.item(item, 'values')
+            if col_index >= len(values):
                 return
 
-            self.view_image(column_name, image_data)
+            cell_value = values[col_index]
+
+            # Если в ячейке текст "🖼️ Фото", значит нужно получить реальные данные из БД
+            if cell_value == "🖼️ Фото":
+                # Находим первичный ключ записи
+                cursor = self.connection.cursor()
+
+                # Получаем первичный ключ таблицы
+                cursor.execute(f"PRAGMA table_info({self.escape_table_name(self.current_table)})")
+                columns_info = cursor.fetchall()
+                primary_key_name = columns_info[0][1]
+
+                # Находим значение первичного ключа в отображаемых данных
+                pk_index = -1
+                for i, col in enumerate(self.tree['columns']):
+                    if col == primary_key_name:
+                        pk_index = i
+                        break
+
+                if pk_index != -1 and pk_index < len(values):
+                    primary_key_value = values[pk_index]
+
+                    # Получаем данные фото из БД
+                    query = f"SELECT {self.escape_table_name(column_name)} FROM {self.escape_table_name(self.current_table)} WHERE {primary_key_name} = ?"
+                    cursor.execute(query, (primary_key_value,))
+                    result = cursor.fetchone()
+
+                    if result and result[0] and isinstance(result[0], bytes):
+                        image_data = result[0]
+                        self.view_image(column_name, image_data)
+                    else:
+                        messagebox.showwarning("Предупреждение", "Фото не найдено в базе данных!")
+                else:
+                    messagebox.showwarning("Предупреждение", "Не удалось определить запись!")
+            else:
+                messagebox.showinfo("Информация", "В этой ячейке нет фото")
 
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка просмотра фото: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка просмотра фото: {str(e)}")
 
-    def view_image(self, column_name, image_data):
+    def view_image(self, column_name, image_data, record_info=""):
         """Просмотр полноразмерного изображения"""
         try:
             image_window = tk.Toplevel(self.root)
-            image_window.title(f"Фото - {column_name}")
-            image_window.geometry("600x500")
+            image_window.title(f"Фото - {column_name} {record_info}")
+            image_window.geometry("800x600")
 
+            # Создаем главный фрейм
+            main_frame = ttk.Frame(image_window)
+            main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+            # Загружаем изображение
             image = Image.open(io.BytesIO(image_data))
 
-            # Масштабируем изображение под размер окна
-            width, height = image.size
-            max_size = 500
-            if width > max_size or height > max_size:
-                ratio = min(max_size / width, max_size / height)
-                new_size = (int(width * ratio), int(height * ratio))
+            # Получаем оригинальный размер
+            original_width, original_height = image.size
+
+            # Рассчитываем размер для отображения
+            max_width = 750
+            max_height = 500
+
+            if original_width > max_width or original_height > max_height:
+                ratio = min(max_width / original_width, max_height / original_height)
+                new_size = (int(original_width * ratio), int(original_height * ratio))
                 image = image.resize(new_size, Image.Resampling.LANCZOS)
 
+            # Преобразуем для Tkinter
             photo = ImageTk.PhotoImage(image)
 
-            label = tk.Label(image_window, image=photo)
+            # Создаем метку с изображением
+            label = tk.Label(main_frame, image=photo)
             label.image = photo
-            label.pack(padx=10, pady=10)
+            label.pack(expand=True)
 
-            # Кнопка сохранения
-            save_btn = ttk.Button(image_window, text="💾 Сохранить фото",
-                                  command=lambda: self.save_image(image_data))
-            save_btn.pack(pady=10)
+            # Панель информации
+            info_frame = ttk.Frame(main_frame)
+            info_frame.pack(fill=tk.X, pady=10)
+
+            ttk.Label(info_frame,
+                      text=f"Размер: {original_width}x{original_height} пикселей | "
+                           f"Объем: {len(image_data)} байт").pack(side=tk.LEFT)
+
+            # Панель кнопок
+            button_frame = ttk.Frame(main_frame)
+            button_frame.pack(fill=tk.X, pady=10)
+
+            ttk.Button(button_frame, text="💾 Сохранить фото",
+                       command=lambda: self.save_image(image_data, f"photo_{column_name}_{record_info}"),
+                       style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+
+            ttk.Button(button_frame, text="🖨️ Печать",
+                       command=lambda: self.print_image(Image.open(io.BytesIO(image_data)),
+                                                        f"{column_name}_{record_info}"),
+                       style='Secondary.TButton').pack(side=tk.LEFT, padx=5)
+
+            ttk.Button(button_frame, text="✏️ Редактировать",
+                       command=lambda: self.edit_image_dialog(column_name, image_data, image_window),
+                       style='Success.TButton').pack(side=tk.LEFT, padx=5)
+
+            ttk.Button(button_frame, text="❌ Закрыть",
+                       command=image_window.destroy,
+                       style='Danger.TButton').pack(side=tk.RIGHT)
+
+            # Добавляем возможность изменения размера окна
+            image_window.resizable(True, True)
 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка просмотра фото: {e}")
+
+    def view_image_with_info(self, column_name, image_data, primary_key=None, record_id=None):
+        """Просмотр изображения с информацией о записи"""
+        record_info = f"(ID: {record_id})" if record_id else ""
+        self.view_image(column_name, image_data, record_info)
 
     def save_image(self, image_data):
         """Сохранение изображения в файл"""
@@ -1739,9 +1881,13 @@ class ModernDatabaseApp:
             messagebox.showwarning("Предупреждение", "Нет данных для экспорта!")
             return
 
+        # Используем домашнюю папку пользователя по умолчанию
+        initial_dir = os.path.expanduser("~")
+
         file_path = filedialog.asksaveasfilename(
             title="Сохранить как Excel",
             defaultextension=".xlsx",
+            initialdir=initial_dir,
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
         )
 
@@ -1760,11 +1906,20 @@ class ModernDatabaseApp:
                 if self.is_image_column(col):
                     df[col] = ["🖼️ Фото" if isinstance(val, bytes) else val for val in df[col]]
 
+            # Создаем директорию, если она не существует
+            directory = os.path.dirname(file_path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory)
+
             df.to_excel(file_path, index=False, engine='openpyxl')
 
             self.update_status(f"✅ Данные экспортированы в {os.path.basename(file_path)}")
             messagebox.showinfo("Успех", f"Данные успешно экспортированы в:\n{file_path}")
 
+        except PermissionError as e:
+            messagebox.showerror("Ошибка доступа",
+                                 f"Нет прав доступа к файлу:\n{file_path}\n\n"
+                                 f"Сохраните файл в другую папку (например, Документы или Рабочий стол)")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка экспорта в Excel: {e}")
 
@@ -1862,7 +2017,37 @@ class ModernDatabaseApp:
         dialog = ModernSelectAttributesDialog(self.root, self)
         self.root.wait_window(dialog.top)
 
-    # НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ФОТОГРАФИЯМИ И КОДИРОВКОЙ
+    def check_and_display_photos(self):
+        """Быстрая проверка наличия фото в таблице"""
+        if not self.current_table:
+            return
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(f"PRAGMA table_info({self.escape_table_name(self.current_table)})")
+            columns = cursor.fetchall()
+
+            image_columns = []
+            for col in columns:
+                if col[2].upper() == 'BLOB':
+                    image_columns.append(col[1])
+
+            if image_columns:
+                photo_found = False
+                for col_name in image_columns:
+                    # Проверяем первую запись
+                    cursor.execute(f"SELECT COUNT(*) FROM {self.current_table} WHERE {col_name} IS NOT NULL")
+                    result = cursor.fetchone()
+
+                    if result and result[0] > 0:
+                        self.update_status(f"✅ Найдено {result[0]} фото в колонке '{col_name}'")
+                        photo_found = True
+
+                if not photo_found:
+                    self.update_status("ℹ️ В таблице есть колонки для фото, но фото не найдены")
+
+        except Exception as e:
+            pass
 
     def inspect_database(self):
         """Функция для изучения структуры базы данных"""
@@ -2096,7 +2281,250 @@ class ModernDatabaseApp:
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при извлечении фотографии: {e}")
 
+    def view_selected_image_full(self):
+        """Просмотр полноразмерного фото из выделенной ячейки"""
+        selection = self.tree.selection()
+        if not selection:
+            return
 
+        item = selection[0]
+        column = self.tree.identify_column(self.tree.winfo_pointerx() - self.tree.winfo_rootx())
+
+        if not column or column == '#0':
+            return
+
+        col_index = int(column.replace('#', '')) - 1
+        column_name = self.tree['columns'][col_index]
+
+        if not self.is_image_column(column_name):
+            messagebox.showwarning("Предупреждение", "Выбранная колонка не содержит фото!")
+            return
+
+        try:
+            # Получаем данные из базы данных
+            cursor = self.connection.cursor()
+
+            # Находим первичный ключ и его значение
+            cursor.execute(f"PRAGMA table_info({self.escape_table_name(self.current_table)})")
+            columns_info = cursor.fetchall()
+            primary_key_name = columns_info[0][1]
+
+            # Получаем все значения строки
+            values = self.tree.item(item, 'values')
+
+            # Находим индекс первичного ключа в отображаемых данных
+            pk_index = -1
+            for i, col in enumerate(self.tree['columns']):
+                if col == primary_key_name:
+                    pk_index = i
+                    break
+
+            if pk_index != -1 and pk_index < len(values):
+                primary_key_value = values[pk_index]
+
+                # Получаем фото из базы данных
+                query = f"SELECT {self.escape_table_name(column_name)} FROM {self.escape_table_name(self.current_table)} WHERE {primary_key_name} = ?"
+                cursor.execute(query, (primary_key_value,))
+                result = cursor.fetchone()
+
+                if result and result[0] and isinstance(result[0], bytes):
+                    record_info = f"(ID: {primary_key_value})"
+                    self.view_image(column_name, result[0], record_info)
+                else:
+                    messagebox.showinfo("Информация", "Фото не найдено в базе данных")
+            else:
+                messagebox.showwarning("Предупреждение", "Не удалось определить запись!")
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка получения фото: {str(e)}")
+
+    def export_all_photos(self):
+        """Экспорт всех фотографий из таблицы"""
+        if not self.current_table:
+            messagebox.showwarning("Предупреждение", "Сначала выберите таблицу!")
+            return
+
+        try:
+            # Спрашиваем директорию для сохранения
+            directory = filedialog.askdirectory(title="Выберите папку для сохранения фото")
+            if not directory:
+                return
+
+            cursor = self.connection.cursor()
+
+            # Получаем информацию о колонках
+            cursor.execute(f"PRAGMA table_info({self.escape_table_name(self.current_table)})")
+            columns_info = cursor.fetchall()
+
+            photo_columns = []
+            for col in columns_info:
+                if col[2].upper() == 'BLOB':
+                    photo_columns.append(col[1])
+
+            if not photo_columns:
+                messagebox.showinfo("Информация", "В таблице нет колонок с фото (BLOB)")
+                return
+
+            # Для каждой фото-колонки экспортируем фото
+            total_saved = 0
+            for col_name in photo_columns:
+                # Получаем первичный ключ
+                primary_key = columns_info[0][1]
+
+                # Получаем все записи с фото
+                query = f"SELECT {primary_key}, {col_name} FROM {self.current_table} WHERE {col_name} IS NOT NULL"
+                cursor.execute(query)
+                results = cursor.fetchall()
+
+                for row_id, photo_data in results:
+                    if isinstance(photo_data, bytes) and len(photo_data) > 100:
+                        # Определяем формат изображения
+                        try:
+                            image = Image.open(io.BytesIO(photo_data))
+                            format = image.format.lower() if image.format else 'jpg'
+                        except:
+                            format = 'jpg'
+
+                        # Создаем имя файла
+                        filename = f"{self.current_table}_{col_name}_{row_id}.{format}"
+                        filepath = os.path.join(directory, filename)
+
+                        try:
+                            with open(filepath, 'wb') as f:
+                                f.write(photo_data)
+                            total_saved += 1
+                        except Exception as e:
+                            print(f"Ошибка сохранения {filename}: {e}")
+
+            self.update_status(f"✅ Экспортировано {total_saved} фото в {directory}")
+            messagebox.showinfo("Успех", f"Экспортировано {total_saved} фотографий в:\n{directory}")
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка экспорта фото: {e}")
+
+    def print_image(self, image, title):
+        """Печать изображения"""
+        if not REPORTLAB_AVAILABLE:
+            messagebox.showwarning("Предупреждение", "Модуль reportlab не установлен!")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="Сохранить фото как PDF",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
+        )
+
+        if file_path:
+            try:
+                # Сохраняем временное изображение
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                    image.save(tmp.name, format='JPEG')
+                    temp_image_path = tmp.name
+
+                # Создаем PDF
+                from reportlab.lib.pagesizes import letter
+                from reportlab.lib.utils import ImageReader
+
+                pdf = canvas.Canvas(file_path, pagesize=letter)
+                pdf.setTitle(f"Фото - {title}")
+
+                # Добавляем заголовок
+                pdf.setFont("Helvetica-Bold", 16)
+                pdf.drawString(100, 750, f"Фото: {title}")
+
+                # Добавляем дату
+                pdf.setFont("Helvetica", 10)
+                pdf.drawString(100, 730, f"Дата: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+
+                # Добавляем изображение
+                img = ImageReader(temp_image_path)
+                pdf.drawImage(img, 100, 400, width=400, height=300, preserveAspectRatio=True)
+
+                # Сохраняем PDF
+                pdf.save()
+
+                # Удаляем временный файл
+                os.unlink(temp_image_path)
+
+                self.update_status(f"✅ Фото сохранено как PDF: {os.path.basename(file_path)}")
+
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Ошибка печати фото: {e}")
+
+    def edit_image_dialog(self, column_name, image_data, parent_window):
+        """Диалог редактирования изображения"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Редактирование изображения")
+        dialog.geometry("500x400")
+        dialog.configure(bg='#f5f5f5')
+
+        main_frame = ttk.Frame(dialog, style='Modern.TFrame')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        ttk.Label(main_frame, text="✏️ Редактирование изображения",
+                  font=('Segoe UI', 12, 'bold')).pack(pady=10)
+
+        # Загружаем изображение
+        image = Image.open(io.BytesIO(image_data))
+        self.current_edit_image = image  # Сохраняем для доступа
+        photo = ImageTk.PhotoImage(image)
+
+        # Превью
+        preview_label = tk.Label(main_frame, image=photo)
+        preview_label.image = photo
+        self.current_preview_label = preview_label
+        preview_label.pack(pady=10)
+
+        # Кнопки редактирования
+        button_frame = ttk.Frame(main_frame, style='Modern.TFrame')
+        button_frame.pack(fill=tk.X, pady=10)
+
+        def rotate_left():
+            self.current_edit_image = self.current_edit_image.rotate(90, expand=True)
+            new_photo = ImageTk.PhotoImage(self.current_edit_image)
+            self.current_preview_label.config(image=new_photo)
+            self.current_preview_label.image = new_photo
+
+        def rotate_right():
+            self.current_edit_image = self.current_edit_image.rotate(-90, expand=True)
+            new_photo = ImageTk.PhotoImage(self.current_edit_image)
+            self.current_preview_label.config(image=new_photo)
+            self.current_preview_label.image = new_photo
+
+        def adjust_brightness():
+            # Упрощенная регулировка яркости
+            from PIL import ImageEnhance
+            enhancer = ImageEnhance.Brightness(self.current_edit_image)
+            self.current_edit_image = enhancer.enhance(1.2)
+            new_photo = ImageTk.PhotoImage(self.current_edit_image)
+            self.current_preview_label.config(image=new_photo)
+            self.current_preview_label.image = new_photo
+
+        ttk.Button(button_frame, text="↪ Повернуть влево",
+                   command=rotate_left).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="↩ Повернуть вправо",
+                   command=rotate_right).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="🔆 Яркость",
+                   command=adjust_brightness).pack(side=tk.LEFT, padx=5)
+
+        # Кнопки сохранения
+        save_frame = ttk.Frame(main_frame, style='Modern.TFrame')
+        save_frame.pack(fill=tk.X, pady=20)
+
+        def save_changes():
+            # Конвертируем обратно в bytes
+            img_byte_arr = io.BytesIO()
+            self.current_edit_image.save(img_byte_arr, format='JPEG')
+            new_image_data = img_byte_arr.getvalue()
+
+            # Здесь можно добавить сохранение в БД
+            messagebox.showinfo("Информация", "Изменения применены (в демо-режиме)")
+            dialog.destroy()
+
+        ttk.Button(save_frame, text="💾 Сохранить изменения",
+                   command=save_changes, style='Success.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(save_frame, text="❌ Отмена",
+                   command=dialog.destroy, style='Secondary.TButton').pack(side=tk.LEFT, padx=5)
 # КЛАССЫ ДИАЛОГОВ
 
 class ModernAddColumnDialog:
