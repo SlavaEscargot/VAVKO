@@ -1504,8 +1504,7 @@ class ModernDatabaseApp:
                 y_pos -= row_height
 
             pdf.save()
-            self.update_status(f"✅ PDF  git --version
-git config --global init.defaultBranch mainсохранен: {os.path.basename(file_path)}")
+            self.update_status(f"✅ PDF сохранен: {os.path.basename(file_path)}")
             messagebox.showinfo("Успех", f"PDF успешно создан:\n{file_path}")
 
         except Exception as e:
