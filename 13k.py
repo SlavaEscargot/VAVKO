@@ -399,14 +399,14 @@ class ModernDatabaseApp(QMainWindow):
 
     def quick_add_photo(self):
         """Быстрое добавление фото с помощью горячей клавиши"""
-        # Получаем выбранную ячейку
-        selected_items = self.table_widget.selectedItems()
-        if not selected_items:
+        # Получаем текущую выбранную ячейку
+        current_item = self.table_widget.currentItem()
+        if not current_item:
             QMessageBox.warning(self, "Внимание", "Сначала выберите ячейку для добавления фото!")
             return
 
-        row = selected_items[0].row()
-        col = selected_items[0].column()
+        row = current_item.row()
+        col = current_item.column()
         column_name = self.table_widget.horizontalHeaderItem(col).text()
 
         # Проверяем, является ли это фото-колонкой
@@ -900,10 +900,15 @@ class ModernDatabaseApp(QMainWindow):
 
         # Получаем название колонки и текущее значение
         column_name = self.table_widget.horizontalHeaderItem(col).text()
-        current_value = self.table_widget.item(row, col).text()
+        current_item = self.table_widget.item(row, col)
+
+        if not current_item:
+            return
+
+        current_value = current_item.text()
 
         # Проверяем, не является ли это фото
-        item_data = self.table_widget.item(row, col).data(Qt.ItemDataRole.UserRole)
+        item_data = current_item.data(Qt.ItemDataRole.UserRole)
         if item_data and isinstance(item_data, bytes):
             # Это фото, показываем диалог для фото
             self.add_photo_dialog(column_name, row, col)
