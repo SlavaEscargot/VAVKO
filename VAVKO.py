@@ -240,7 +240,232 @@ class ModernDatabaseApp(QMainWindow):
         
         applyTextFit(self)
         self.setupHotkeys()
+
+    def printToPrinter(self):
+        """Печать на физический принтер"""
+        if not self.current_table and not self.joined_tables:
+            QMessageBox.warning(self, "Предупреждение", "Нет данных")
+            return
         
+        try:
+            query, cols = self.buildQuery()
+            cursor = self.connection.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            
+            if not rows:
+                QMessageBox.information(self, "Информация", "Нет данных")
+                return
+            
+            # ---- УНИВЕРСАЛЬНЫЙ БЛОК (работает во всех версиях PyQt6) ----
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            
+            # Задаём страницу через QPageSize (существует в вашей версии)
+            printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+            # Задаём ориентацию через QPageLayout (существует в вашей версии)
+            printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+            # -------------------------------------------------------------
+            
+            # Открываем диалог печати
+            dialog = QPrintDialog(printer, self)
+            dialog.setWindowTitle("Печать отчета")
+            
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            
+            # Создаём Painter для рисования на принтере
+            painter = QPainter(printer)
+            painter.begin(printer)
+            
+            # Получаем размеры страницы принтера в пикселях
+            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+            page_width = page_rect.width()
+            page_height = page_rect.height()
+            
+            margin = int(page_width * 0.05)  # 5% от ширины страницы
+            table_width = page_width - 2 * margin
+            
+            # Рассчитываем ширину колонок (в пикселях принтера)
+            num_cols = len(cols)
+            col_width = table_width / num_cols
+            if col_width < 150: col_width = 150  # минимальная ширина
+            
+            # Координаты начала рисования
+            y = margin + 30
+            
+            # --- ЗАГОЛОВОК ОТЧЕТА ---
+            painter.setPen(QColor(0, 0, 0))
+            painter.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
+            painter.drawText(margin, y, f"Отчет: {self.current_table}")
+            y += 40
+            
+            painter.setFont(QFont("Segoe UI", 10))
+            painter.drawText(margin, y, f"База данных: {os.path.basename(self.db_name)}")
+            y += 22
+            painter.drawText(margin, y, f"Дата создания: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            y += 40
+            
+            # --- ПОДГОТОВКА ДАННЫХ ---
+            formatted_rows = []
+            img_cols = [c for c in cols if self.isImageColumn(c)]
+            
+            for r, row in enumerate(rows):
+                formatted_row = []
+                max_height = 40  # Минимальная высота строки в пикселях принтера
+                
+                for c, val in enumerate(row):
+                    name = cols[c]
+                    cell_data = {'text_lines': [], 'image_data': None, 'height': 40}
+                    
+                    if name in img_cols and val and isinstance(val, bytes) and self.isValidImage(val):
+                        cell_data['image_data'] = val
+                        cell_data['height'] = 150  # Фото требует высоты
+                    
+                    elif val is not None and not isinstance(val, bool):
+                        text = str(val)
+                        # Перенос текста (приблизительный расчет)
+                        char_width = 9  # средняя ширина символа в пикселях принтера
+                        max_chars = int(col_width / char_width) - 2
+                        lines = self.wrap_text(text, max_chars)
+                        cell_data['text_lines'] = lines
+                        h = len(lines) * 15 + 8
+                        if h > cell_data['height']:
+                            cell_data['height'] = h
+                    
+                    else:
+                        if isinstance(val, bool):
+                            cell_data['text_lines'] = ["✅ Да" if val else "❌ Нет"]
+                        else:
+                            cell_data['text_lines'] = [""]
+                        cell_data['height'] = 35
+                    
+                    if cell_data['height'] > max_height:
+                        max_height = cell_data['height']
+                    
+                    formatted_row.append(cell_data)
+                
+                for cell in formatted_row:
+                    cell['height'] = max_height
+                
+                formatted_rows.append({'cells': formatted_row, 'height': max_height})
+            
+            # --- ОТРИСОВКА ТАБЛИЦЫ НА ПРИНТЕРЕ ---
+            header_height = 35
+            
+            # 1. Рисуем заголовки колонок
+            painter.setPen(Qt.PenStyle.SolidLine)
+            x = margin
+            
+            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            
+            # Верхняя линия
+            painter.drawLine(margin, y, margin + table_width, y)
+            y -= header_height
+            painter.drawLine(margin, y, margin + table_width, y)
+            
+            for i, name in enumerate(cols):
+                painter.drawLine(x, y + header_height, x, y)
+                # Отрисовка текста с отступом
+                painter.drawText(x + 6, y + 12, str(name))
+                x += col_width
+            painter.drawLine(margin + table_width, y + header_height, margin + table_width, y)
+            
+            # 2. Рисуем строки данных
+            painter.setFont(QFont("Segoe UI", 8))
+            
+            for row_data in formatted_rows:
+                row_height = row_data['height'] + 8
+                
+                # Если не хватает места, создаем новую страницу
+                if y - row_height < margin:
+                    printer.newPage()
+                    y = page_height - margin - 20
+                    x = margin
+                    painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+                    painter.drawLine(margin, y, margin + table_width, y)
+                    y -= header_height
+                    painter.drawLine(margin, y, margin + table_width, y)
+                    for i, name in enumerate(cols):
+                        painter.drawLine(x, y + header_height, x, y)
+                        painter.drawText(x + 6, y + 12, str(name))
+                        x += col_width
+                    painter.drawLine(margin + table_width, y + header_height, margin + table_width, y)
+                    painter.setFont(QFont("Segoe UI", 8))
+                    y -= 6
+                
+                y -= row_height
+                painter.drawLine(margin, y, margin + table_width, y)
+                
+                x = margin
+                for i, cell in enumerate(row_data['cells']):
+                    painter.drawLine(x, y + row_height, x, y)
+                    
+                    if cell['image_data']:
+                        # ЗАГРУЗКА И РИСОВАНИЕ ФОТО НА ПРИНТЕР
+                        try:
+                            qimg = QImage()
+                            qimg.loadFromData(cell['image_data'])
+                            pix = QPixmap.fromImage(qimg)
+                            
+                            if not pix.isNull():
+                                max_w = int(col_width - 12)
+                                max_h = int(row_height - 12)
+                                
+                                # Масштабируем для принтера
+                                scaled = pix.scaled(max_w, max_h, 
+                                                    Qt.AspectRatioMode.KeepAspectRatio,
+                                                    Qt.TransformationMode.SmoothTransformation)
+                                
+                                img_x = int(x + (col_width - scaled.width()) / 2)
+                                img_y = int(y + (row_height - scaled.height()) / 2)
+                                painter.drawPixmap(img_x, img_y, scaled)
+                            else:
+                                painter.drawText(x + 6, y + int(row_height/2), "⚠️ Ошибка фото")
+                        except Exception as e:
+                            painter.drawText(x + 6, y + int(row_height/2), "⚠️ Ошибка")
+                    
+                    elif cell['text_lines']:
+                        lines = cell['text_lines']
+                        line_height = 14
+                        total_text_height = len(lines) * line_height
+                        start_y = int(y + (row_height - total_text_height) / 2 + (line_height - 2))
+                        
+                        for j, line in enumerate(lines):
+                            painter.drawText(x + 6, start_y + j * line_height, line)
+                    
+                    x += col_width
+                
+                # Правая граница строки
+                painter.drawLine(margin + table_width, y + row_height, margin + table_width, y)
+            
+            painter.end()  # Завершаем рисование на принтере
+            self.updateStatus("✅ Отправлено на печать")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка печати", str(e))
+            print(f"Ошибка при печати: {e}")
+    def fixPhotoRowHeights(self):
+        """Принудительно выставляет высоту строк с фото, чтобы виджеты не срезались"""
+        if not hasattr(self, 'table') or not self.image_columns:
+            return
+            
+        # Получаем индекс колонки с фото (берём первую найденную)
+        photo_col_index = -1
+        for i in range(self.table.columnCount()):
+            header = self.table.horizontalHeaderItem(i)
+            if header and header.text() in self.image_columns:
+                photo_col_index = i
+                break
+                
+        if photo_col_index == -1:
+            return
+
+        for r in range(self.table.rowCount()):
+            w = self.table.cellWidget(r, photo_col_index)
+            if w and isinstance(w, ImageWidget):
+                # Если в ячейке есть виджет с фото, запрещаем таблице сжимать эту строку
+                # Размер берем из константы (100px) и добавляем запас на рамки
+                self.table.setRowHeight(r, CELL_HEIGHT + 4)        
     def registerRussianFont(self):
         """Регистрация русского шрифта для PDF"""
         # Пути к шрифтам с кириллицей
@@ -325,6 +550,8 @@ class ModernDatabaseApp(QMainWindow):
             ("📥 Импорт Excel", self.importExcel, "success"),
             ("📤 Excel с фото", self.exportExcelWithPhotos, "success"),
             ("🔍 Исследовать", self.inspectDB, "primary"),
+            ("🖨️ Сохранить PDF", self.printData, "warning"),
+            ("🖨️ Напечатать", self.printToPrinter, "warning"),  # <--- НОВАЯ КНОПКА
             ("💾 Сменить БД", self.changeDB, "secondary"),
         ]
         
@@ -336,11 +563,11 @@ class ModernDatabaseApp(QMainWindow):
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             btn.setMinimumHeight(20)
             
-            row = i // 4
-            col = i % 4
+            row = i // 5  # Теперь 5 колонок в ряду
+            col = i % 5
             layout.addWidget(btn, row, col)
         
-        for i in range(4):
+        for i in range(5):
             layout.setColumnStretch(i, 1)
             
         layout.setRowStretch(0, 1)
@@ -529,8 +756,10 @@ class ModernDatabaseApp(QMainWindow):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.showContextMenu)
         self.table.doubleClicked.connect(self.onCellDoubleClick)
-        self.table.horizontalHeader().sectionResized.connect(self.table.resizeRowsToContents)
-        
+        # self.table.horizontalHeader().sectionResized.connect(self.table.resizeRowsToContents)
+
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         right_layout.addWidget(tools_group)
         right_layout.addWidget(self.table)
         
@@ -793,7 +1022,7 @@ class ModernDatabaseApp(QMainWindow):
                 if name in self.image_columns:
                     self.table.setColumnWidth(i, PHOTO_COLUMN_WIDTH)
                     for r in range(len(rows)):
-                        self.table.setRowHeight(r, CELL_HEIGHT)
+                        self.table.setRowHeight(r, CELL_HEIGHT + 6)
                 else:
                     self.table.setColumnWidth(i, TEXT_COLUMN_WIDTH)
             
@@ -833,6 +1062,7 @@ class ModernDatabaseApp(QMainWindow):
                 self.sort_col.setCurrentIndex(0)
             
             self.table.resizeRowsToContents()
+            self.fixPhotoRowHeights()
                 
         except sqlite3.Error as e:
             QMessageBox.critical(self, "Ошибка", str(e))
@@ -1819,7 +2049,7 @@ class ModernDatabaseApp(QMainWindow):
             QMessageBox.critical(self, "Ошибка", str(e))
     
     def printData(self):
-        """Печать данных в PDF с поддержкой русского языка"""
+        """Полноценная печать данных в PDF с авто-подбором высоты строк и переносом текста"""
         if not self.current_table and not self.joined_tables:
             QMessageBox.warning(self, "Предупреждение", "Нет данных")
             return
@@ -1841,85 +2071,157 @@ class ModernDatabaseApp(QMainWindow):
             pdf = canvas.Canvas(path, pagesize=landscape(A4))
             pdf.setTitle(f"База - {self.current_table}")
             
-            # Устанавливаем шрифт с поддержкой кириллицы
+            # Шрифт
             if self.russian_font_registered:
                 pdf.setFont('RussianFont', 10)
             else:
                 pdf.setFont('Helvetica', 10)
             
-            # Параметры таблицы
+            # Параметры
+            margin = 40
             page_width, page_height = landscape(A4)
-            margin = 50
-            col_width = 100  # Ширина колонки
-            row_height = 60  # Высота строки
-            x0 = margin
-            y0 = page_height - margin - 20
+            table_width = page_width - 2 * margin
             
-            # Заголовок
-            pdf.setFontSize(14)
-            pdf.drawString(x0, y0 + 30, f"Таблица: {self.current_table}")
+            # Рассчитываем ширину колонок (поровну)
+            num_cols = len(cols)
+            col_width = table_width / num_cols
+            if col_width < 40: col_width = 40  # минимальная ширина
+            
+            y = page_height - margin
+            
+            # --- ЗАГОЛОВОК ОТЧЕТА ---
+            pdf.setFontSize(18)
+            pdf.setFont('RussianFont' if self.russian_font_registered else 'Helvetica-Bold', 18)
+            pdf.drawString(margin, y, f"Отчет: {self.current_table}")
+            y -= 30
+            
             pdf.setFontSize(10)
-            pdf.drawString(x0, y0 + 15, f"База: {os.path.basename(self.db_name)}")
-            pdf.drawString(x0, y0, f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            pdf.setFont('RussianFont' if self.russian_font_registered else 'Helvetica', 10)
+            pdf.drawString(margin, y, f"База данных: {os.path.basename(self.db_name)}")
+            y -= 18
+            pdf.drawString(margin, y, f"Дата создания: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            y -= 30
             
-            y = y0 - 30
-            
-            # Заголовки колонок
-            pdf.setFontSize(8)
-            for i, name in enumerate(cols):
-                x = x0 + i * col_width
-                pdf.rect(x, y, col_width, 20)
-                # Обрезаем длинные названия
-                display_name = str(name)[:15]
-                pdf.drawString(x + 2, y + 5, display_name)
-            
-            y -= 20
-            temp_files = []
-            
+            # --- ПОДГОТОВКА ДАННЫХ ДЛЯ ОТРИСОВКИ ---
+            # Чтобы не пересчитывать много раз, подготовим всё заранее
+            formatted_rows = []
             img_cols = [c for c in cols if self.isImageColumn(c)]
             
             for r, row in enumerate(rows):
-                if y < margin + 50:
-                    pdf.showPage()
-                    if self.russian_font_registered:
-                        pdf.setFont('RussianFont', 14)
-                    else:
-                        pdf.setFont('Helvetica', 14)
-                    pdf.drawString(x0, page_height - margin, f"{self.current_table} - продолжение")
-                    y = page_height - margin - 50
-                    if self.russian_font_registered:
-                        pdf.setFont('RussianFont', 8)
-                    else:
-                        pdf.setFont('Helvetica', 8)
-                    for i, name in enumerate(cols):
-                        x = x0 + i * col_width
-                        pdf.rect(x, y, col_width, 20)
-                        pdf.drawString(x + 2, y + 5, str(name)[:15])
-                    y -= 20
+                formatted_row = []
+                max_height = 25  # Минимальная высота строки
                 
-                for i, val in enumerate(row):
-                    name = cols[i]
-                    x = x0 + i * col_width
-                    
-                    # Рисуем рамку ячейки
-                    pdf.rect(x, y, col_width, row_height)
+                for c, val in enumerate(row):
+                    name = cols[c]
+                    cell_data = {'text_lines': [], 'image_data': None, 'height': 25}
                     
                     if name in img_cols and val and isinstance(val, bytes) and self.isValidImage(val):
+                        cell_data['image_data'] = val
+                        cell_data['height'] = 100  # Фото требует высоты
+                    
+                    elif val is not None and not isinstance(val, bool):
+                        text = str(val)
+                        # Перенос текста
+                        lines = self.wrap_text(text, int(col_width / 5.5))
+                        cell_data['text_lines'] = lines
+                        # Высота строки = количество строк * 12px + запас
+                        h = len(lines) * 12 + 8
+                        if h > cell_data['height']:
+                            cell_data['height'] = h
+                    
+                    else:
+                        # Булевы значения и пустые
+                        if isinstance(val, bool):
+                            cell_data['text_lines'] = ["✅ Да" if val else "❌ Нет"]
+                        else:
+                            cell_data['text_lines'] = [""]
+                        cell_data['height'] = 20
+                    
+                    if cell_data['height'] > max_height:
+                        max_height = cell_data['height']
+                    
+                    formatted_row.append(cell_data)
+                
+                # Чтобы все ячейки в строке были одной высоты
+                for cell in formatted_row:
+                    cell['height'] = max_height
+                
+                formatted_rows.append({'cells': formatted_row, 'height': max_height})
+            
+            # --- ОТРИСОВКА ТАБЛИЦЫ ---
+            img_temp_files = []
+            
+            # 1. Рисуем заголовки колонок
+            header_height = 25
+            x = margin
+            pdf.setFontSize(9)
+            pdf.setFont('RussianFont' if self.russian_font_registered else 'Helvetica-Bold', 9)
+            
+            # Верхняя линия заголовка
+            pdf.line(margin, y, margin + table_width, y)
+            y -= header_height
+            pdf.line(margin, y, margin + table_width, y)
+            
+            for i, name in enumerate(cols):
+                # Вертикальные линии заголовка
+                pdf.line(x, y + header_height, x, y)
+                pdf.drawString(x + 4, y + 8, str(name))
+                x += col_width
+            pdf.line(margin + table_width, y + header_height, margin + table_width, y) # Правая линия
+            
+            # 2. Рисуем строки данных
+            pdf.setFontSize(8)
+            pdf.setFont('RussianFont' if self.russian_font_registered else 'Helvetica', 8)
+            
+            # Инициализируем временные файлы для фотографий перед циклом, чтобы не плодить их
+            import tempfile
+            
+            for row_data in formatted_rows:
+                row_height = row_data['height'] + 6 # +6 на отступы
+                
+                # Если не хватает места, создаем новую страницу
+                if y - row_height < margin:
+                    pdf.showPage()
+                    if self.russian_font_registered:
+                        pdf.setFont('RussianFont', 12)
+                    else:
+                        pdf.setFont('Helvetica', 12)
+                    pdf.drawString(margin, page_height - 40, f"{self.current_table} (продолжение)")
+                    y = page_height - margin - 20
+                    # Перерисовываем заголовки
+                    x = margin
+                    pdf.setFontSize(8)
+                    pdf.setFont('RussianFont-Bold' if self.russian_font_registered else 'Helvetica-Bold', 8)
+                    pdf.line(margin, y, margin + table_width, y)
+                    y -= header_height
+                    pdf.line(margin, y, margin + table_width, y)
+                    for i, name in enumerate(cols):
+                        pdf.line(x, y + header_height, x, y)
+                        pdf.drawString(x + 4, y + 8, str(name))
+                        x += col_width
+                    pdf.line(margin + table_width, y + header_height, margin + table_width, y)
+                    y -= 4 # маленький отступ
+                
+                # Рисуем нижнюю линию для этой строки
+                y -= row_height
+                pdf.line(margin, y, margin + table_width, y)
+                
+                x = margin
+                for i, cell in enumerate(row_data['cells']):
+                    # Вертикальные линии
+                    pdf.line(x, y + row_height, x, y)
+                    
+                    if cell['image_data']:
+                        # ВСТАВКА ФОТО
                         try:
-                            # Временный файл для изображения
                             temp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-                            temp.write(val)
+                            temp.write(cell['image_data'])
                             temp.close()
-                            temp_files.append(temp.name)
+                            img_temp_files.append(temp.name)
                             
-                            # Открываем изображение
-                            img = Image.open(BytesIO(val))
-                            
-                            # Вычисляем размер с учетом отступов
                             max_w = col_width - 8
                             max_h = row_height - 8
-                            
-                            # Масштабируем изображение, сохраняя пропорции
+                            img = Image.open(BytesIO(cell['image_data']))
                             img_w, img_h = img.size
                             ratio = min(max_w / img_w, max_h / img_h)
                             new_w = int(img_w * ratio)
@@ -1927,58 +2229,44 @@ class ModernDatabaseApp(QMainWindow):
                             
                             if ratio < 1:
                                 img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                            
-                            # Сохраняем масштабированное изображение
                             img.save(temp.name, format='PNG')
                             
-                            # Центрируем изображение в ячейке
+                            # Центрируем
                             img_x = x + (col_width - new_w) / 2
                             img_y = y + (row_height - new_h) / 2
-                            
                             pdf.drawImage(ImageReader(temp.name), img_x, img_y,
                                          width=new_w, height=new_h, preserveAspectRatio=True)
                         except Exception as e:
-                            pdf.setFontSize(7)
-                            pdf.drawString(x + 2, y + row_height/2, "Ошибка")
-                            print(f"Ошибка при вставке изображения: {e}")
+                            pdf.drawString(x + 4, y + row_height/2 - 4, "⚠️ Ошибка фото")
                     
-                    elif val is None:
-                        # Пустая ячейка
-                        pass
-                    
-                    elif isinstance(val, bool):
-                        pdf.setFontSize(7)
-                        pdf.drawString(x + 2, y + row_height/2, "Да" if val else "Нет")
-                    
-                    else:
-                        # Текстовые данные
-                        text = str(val)
-                        if len(text) > 15:
-                            text = text[:12] + "..."
-                        
-                        pdf.setFontSize(7)
-                        # Разбиваем длинный текст на несколько строк
-                        lines = self.wrap_text(text, 15)
-                        line_height = 10
-                        start_y = y + row_height/2 + (len(lines) * line_height)/2
+                    elif cell['text_lines']:
+                        # ВСТАВКА ТЕКСТА С ПЕРЕНОСОМ
+                        lines = cell['text_lines']
+                        line_height = 11
+                        # Вертикальное центрирование многострочного текста
+                        total_text_height = len(lines) * line_height
+                        start_y = y + (row_height - total_text_height) / 2 + (line_height - 2)
                         
                         for j, line in enumerate(lines):
-                            pdf.drawString(x + 2, start_y - j * line_height, line)
+                            pdf.drawString(x + 4, start_y - j * line_height, line)
+                    
+                    x += col_width
                 
-                y -= row_height
+                # Правая граница строки
+                pdf.line(margin + table_width, y + row_height, margin + table_width, y)
             
             pdf.save()
             
-            # Очищаем временные файлы
-            for f in temp_files:
+            # Очистка временных файлов
+            for f in img_temp_files:
                 try:
                     if os.path.exists(f):
                         os.unlink(f)
                 except:
                     pass
             
-            self.updateStatus(f"✅ PDF {os.path.basename(path)}")
-            QMessageBox.information(self, "Успех", f"PDF создан:\n{path}")
+            self.updateStatus(f"✅ PDF сохранен: {os.path.basename(path)}")
+            QMessageBox.information(self, "Успех", f"PDF успешно создан и сохранен:\n{path}")
             
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
