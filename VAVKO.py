@@ -560,7 +560,7 @@ class ModernDatabaseApp(QMainWindow):
             btn.clicked.connect(callback)
             # тут фикс кнопочки лЯЯЯЯЯЯЯЯЯЯЯЯЯЯЯ
             self.styleButton(btn, style)
-            
+            #123456789
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             btn.setMinimumHeight(20)
             
