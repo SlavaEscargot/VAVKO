@@ -541,14 +541,12 @@ class ModernDatabaseApp(QMainWindow):
         group = QGroupBox("Быстрые действия")
         layout = QGridLayout()
         layout.setContentsMargins(4, 4, 4, 4)
-        
-        actions = [
-            ("📊 Создать таблицу", self.createTable, "primary"),
+        actions = [            ("📊 Создать таблицу", self.createTable, "primary"),
             ("🗑️ Удалить таблицу", self.deleteTable, "danger"),
             ("🔗 Соединение", self.quickJoin, "primary"),
             ("👁️ Атрибуты", self.selectAttributes, "secondary"),
             ("📥 Импорт Excel", self.importExcel, "success"),
-            ("📤 Excel с фото", self.exportExcelWithPhotos, "success"),
+            ("📤 Экспорт Excel", self.exportExcelWithPhotos, "success"),
             ("🔍 Исследовать", self.inspectDB, "primary"),
             ("🖨️ Сохранить PDF", self.printData, "warning"),
             ("🖨️ Напечатать", self.printToPrinter, "warning"),  # <--- НОВАЯ КНОПКА
@@ -557,6 +555,7 @@ class ModernDatabaseApp(QMainWindow):
         
         for i, (text, callback, style) in enumerate(actions):
             btn = QPushButton(text)
+            btn.setMaximumHeight(40)
             btn.clicked.connect(callback)
             self.styleButton(btn, style)
             
