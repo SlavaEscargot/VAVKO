@@ -559,6 +559,7 @@ class ModernDatabaseApp(QMainWindow):
         for i, (text, callback, style) in enumerate(actions):
             btn = QPushButton(text)
             btn.clicked.connect(callback)
+            # тут фикс кнопочки лЯЯЯЯЯЯЯЯЯЯЯЯЯЯЯ
             self.styleButton(btn, style)
             
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
