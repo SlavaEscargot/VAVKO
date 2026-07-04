@@ -559,7 +559,7 @@ class ModernDatabaseApp(QMainWindow):
             btn.setMaximumHeight(40)
             btn.clicked.connect(callback)
             self.styleButton(btn, style)
-            
+           # тест номер 2
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             btn.setMinimumHeight(20)
             
