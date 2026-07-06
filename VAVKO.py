@@ -558,9 +558,7 @@ class ModernDatabaseApp(QMainWindow):
             btn = QPushButton(text)
             btn.setMaximumHeight(40)
             btn.clicked.connect(callback)
-            # тут фикс кнопочки лЯЯЯЯЯЯЯЯЯЯЯЯЯЯЯ
             self.styleButton(btn, style)
-            #123456789
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             btn.setMinimumHeight(20)
             
